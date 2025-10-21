@@ -1,234 +1,246 @@
 require('dotenv').config();
-
 const express = require('express');
 const crypto = require('crypto');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.disable('x-powered-by');
 app.use(express.json());
 
-/**
- * In-memory store
- */
+// In-memory store (swap for DB in production)
 const strings = [];
 
 /**
- * Analyze a string and return computed properties
+ * Analyze string and return object shaped per assignment
  */
 function analyzeString(value) {
   const length = value.length;
-  const is_palindrome =
-    value.toLowerCase() === value.toLowerCase().split('').reverse().join('');
+  const is_palindrome = value.toLowerCase() === value.toLowerCase().split('').reverse().join('');
   const unique_characters = new Set(value).size;
-  const word_count = value.trim().split(/\s+/).filter(Boolean).length;
+  const word_count = value.trim().length === 0 ? 0 : value.trim().split(/\s+/).filter(Boolean).length;
   const sha256_hash = crypto.createHash('sha256').update(value).digest('hex');
 
   const character_frequency_map = {};
-  for (const char of value) {
-    character_frequency_map[char] = (character_frequency_map[char] || 0) + 1;
+  for (const ch of value) {
+    character_frequency_map[ch] = (character_frequency_map[ch] || 0) + 1;
   }
 
   return {
     id: sha256_hash,
-    value: value,
+    value,
     properties: {
       length,
       is_palindrome,
       unique_characters,
       word_count,
       sha256_hash,
-      character_frequency_map,
+      character_frequency_map
     },
-    created_at: new Date().toISOString(),
+    created_at: new Date().toISOString()
   };
 }
 
+/* Utility: find by exact value (case-sensitive as spec implies) */
+function findByValue(value) {
+  return strings.find(item => item.value === value);
+}
+
+/* Utility: validate integer-like query param */
+function parseIntOrNull(v) {
+  if (v === undefined) return undefined;
+  const n = parseInt(v, 10);
+  return Number.isNaN(n) ? null : n;
+}
+
 /**
- * 1️⃣ Create / Analyze String
+ * 1) POST /strings
+ * - 400: missing "value"
+ * - 422: wrong type
+ * - 409: duplicate
+ * - 201: created (return full object)
  */
 app.post('/strings', (req, res) => {
   const { value } = req.body;
 
-  // Validation
   if (value === undefined) {
     return res.status(400).json({ error: 'Missing "value" field' });
   }
-
   if (typeof value !== 'string') {
     return res.status(422).json({ error: '"value" must be a string' });
   }
 
-  const exists = strings.find((item) => item.value === value);
-  if (exists) {
+  if (findByValue(value)) {
     return res.status(409).json({ error: 'String already exists in the system' });
   }
 
-  const analyzed = analyzeString(value);
-  strings.push(analyzed);
-
-  return res.status(201).json(analyzed);
+  const entry = analyzeString(value);
+  strings.push(entry);
+  return res.status(201).json(entry);
 });
 
 /**
- * 2️⃣ Get Specific String
+ * 2) GET /strings/{string_value}
+ * - 200: found
+ * - 404: not found
  */
 app.get('/strings/:string_value', (req, res) => {
-  const { string_value } = req.params;
-  const found = strings.find((item) => item.value === string_value);
-
+  const stringValue = req.params.string_value; // express decodes URL-encoding for us
+  const found = findByValue(stringValue);
   if (!found) {
     return res.status(404).json({ error: 'String does not exist in the system' });
   }
-
   return res.status(200).json(found);
 });
 
 /**
- * 3️⃣ Get All Strings with Filtering
+ * 3) GET /strings with filters
+ * Query params: is_palindrome, min_length, max_length, word_count, contains_character
+ * - 400 for invalid query types/values
+ * - 200 with { data, count, filters_applied }
  */
 app.get('/strings', (req, res) => {
-  if (strings.length === 0) {
-    return res.status(200).json({
-      data: [],
-      count: 0,
-      filters_applied: {},
-      message: 'No records yet',
-    });
-  }
-
-  let results = [...strings];
   const {
     is_palindrome,
     min_length,
     max_length,
     word_count,
-    contains_character,
+    contains_character
   } = req.query;
 
+  // Validate types
+  if (is_palindrome !== undefined && !['true', 'false'].includes(is_palindrome)) {
+    return res.status(400).json({ error: 'is_palindrome must be "true" or "false"' });
+  }
+  const minLen = parseIntOrNull(min_length);
+  if (min_length !== undefined && minLen === null) {
+    return res.status(400).json({ error: 'min_length must be an integer' });
+  }
+  const maxLen = parseIntOrNull(max_length);
+  if (max_length !== undefined && maxLen === null) {
+    return res.status(400).json({ error: 'max_length must be an integer' });
+  }
+  const wc = parseIntOrNull(word_count);
+  if (word_count !== undefined && wc === null) {
+    return res.status(400).json({ error: 'word_count must be an integer' });
+  }
+  if (contains_character !== undefined && typeof contains_character !== 'string') {
+    return res.status(400).json({ error: 'contains_character must be a string' });
+  }
+  if (contains_character !== undefined && contains_character.length !== 1) {
+    return res.status(400).json({ error: 'contains_character must be a single character' });
+  }
+
+  let results = strings.slice();
   const filters_applied = {};
 
-  // Validate query types
-  if (is_palindrome && !['true', 'false'].includes(is_palindrome)) {
-    return res.status(400).json({
-      error: 'Invalid query parameter: is_palindrome must be true or false',
-    });
-  }
-
-  if (min_length && isNaN(parseInt(min_length))) {
-    return res.status(400).json({
-      error: 'Invalid query parameter: min_length must be an integer',
-    });
-  }
-
-  if (max_length && isNaN(parseInt(max_length))) {
-    return res.status(400).json({
-      error: 'Invalid query parameter: max_length must be an integer',
-    });
-  }
-
-  if (word_count && isNaN(parseInt(word_count))) {
-    return res.status(400).json({
-      error: 'Invalid query parameter: word_count must be an integer',
-    });
-  }
-
-  // Filtering logic
   if (is_palindrome !== undefined) {
-    const boolValue = is_palindrome === 'true';
-    results = results.filter(
-      (item) => item.properties.is_palindrome === boolValue
-    );
-    filters_applied.is_palindrome = boolValue;
+    const boolVal = is_palindrome === 'true';
+    results = results.filter(item => item.properties.is_palindrome === boolVal);
+    filters_applied.is_palindrome = boolVal;
   }
-
-  if (min_length !== undefined) {
-    const min = parseInt(min_length);
-    results = results.filter((item) => item.properties.length >= min);
-    filters_applied.min_length = min;
+  if (minLen !== undefined) {
+    results = results.filter(item => item.properties.length >= minLen);
+    filters_applied.min_length = minLen;
   }
-
-  if (max_length !== undefined) {
-    const max = parseInt(max_length);
-    results = results.filter((item) => item.properties.length <= max);
-    filters_applied.max_length = max;
+  if (maxLen !== undefined) {
+    results = results.filter(item => item.properties.length <= maxLen);
+    filters_applied.max_length = maxLen;
   }
-
-  if (word_count !== undefined) {
-    const wc = parseInt(word_count);
-    results = results.filter((item) => item.properties.word_count === wc);
+  if (wc !== undefined) {
+    results = results.filter(item => item.properties.word_count === wc);
     filters_applied.word_count = wc;
   }
-
   if (contains_character !== undefined) {
-    if (contains_character.length !== 1) {
-      return res.status(400).json({
-        error: 'contains_character must be a single character',
-      });
-    }
-
-    const char = contains_character.toLowerCase();
-    results = results.filter((item) =>
-      item.value.toLowerCase().includes(char)
-    );
-    filters_applied.contains_character = char;
+    const ch = contains_character.toLowerCase();
+    results = results.filter(item => item.value.toLowerCase().includes(ch));
+    filters_applied.contains_character = ch;
   }
 
   return res.status(200).json({
     data: results,
     count: results.length,
-    filters_applied,
+    filters_applied
   });
 });
 
 /**
- * 4️⃣ Natural Language Filtering
+ * 4) Natural language filtering
+ * GET /strings/filter-by-natural-language?query=...
+ * - 400 if unable to parse
+ * - 422 if parsed but filters conflict (e.g., min > max)
+ * - 200 with { data, count, interpreted_query }
  */
+function parseNaturalLanguageQuery(q) {
+  // return parsed filters object or null if nothing parsed
+  const parsed = {};
+  const s = q.toLowerCase();
+
+  // word count: single/one => 1
+  if (/\b(single|one)\b.*\bword\b/.test(s) || /\bword count is 1\b/.test(s)) {
+    parsed.word_count = 1;
+  }
+  const wcMatch = s.match(/\b(\d+)\s+word(s)?\b/);
+  if (wcMatch) parsed.word_count = Number(wcMatch[1]);
+
+  // palindrome
+  if (/\bpalindrom\w*\b/.test(s)) parsed.is_palindrome = true;
+
+  // longer/shorter than N
+  const longer = s.match(/\blonger than (\d+)/);
+  if (longer) parsed.min_length = Number(longer[1]) + 1; // "longer than 10" => min_length = 11
+  const shorter = s.match(/\b(shorter than|less than) (\d+)/);
+  if (shorter) parsed.max_length = Number(shorter[2]) - 1;
+
+  // contains letter X
+  const letterMatch = s.match(/\b(?:contain(?:ing|s)?(?: the)?(?: letter)?|containing)\s+([a-zA-Z])\b/);
+  if (letterMatch) parsed.contains_character = letterMatch[1].toLowerCase();
+
+  // If nothing parsed -> return null to indicate cannot parse
+  return Object.keys(parsed).length === 0 ? null : parsed;
+}
+
 app.get('/strings/filter-by-natural-language', (req, res) => {
   const { query } = req.query;
   if (!query) {
     return res.status(400).json({ error: 'Missing "query" parameter' });
   }
 
-  let results = [...strings];
-  const lowerQuery = query.toLowerCase();
-  const parsed_filters = {};
-
-  // Handle examples
-  if (lowerQuery.includes('palindrome')) {
-    results = results.filter((item) => item.properties.is_palindrome);
-    parsed_filters.is_palindrome = true;
+  const parsed_filters = parseNaturalLanguageQuery(query);
+  if (!parsed_filters) {
+    return res.status(400).json({ error: 'Unable to parse natural language query' });
   }
 
-  const singleWordMatch = lowerQuery.match(/single word|one word/);
-  if (singleWordMatch) {
-    results = results.filter((item) => item.properties.word_count === 1);
-    parsed_filters.word_count = 1;
+  // Check for conflicting filters (example: min_length > max_length)
+  if (parsed_filters.min_length !== undefined && parsed_filters.max_length !== undefined) {
+    if (parsed_filters.min_length > parsed_filters.max_length) {
+      return res.status(422).json({
+        error: 'Query parsed but resulted in conflicting filters',
+        interpreted_query: {
+          original: query,
+          parsed_filters
+        }
+      });
+    }
   }
 
-  const longerMatch = lowerQuery.match(/longer than (\d+)/);
-  if (longerMatch) {
-    const min = parseInt(longerMatch[1]);
-    results = results.filter((item) => item.properties.length > min);
-    parsed_filters.min_length = min + 1;
+  // Apply filters
+  let results = strings.slice();
+  if (parsed_filters.is_palindrome === true) {
+    results = results.filter(item => item.properties.is_palindrome === true);
   }
-
-  const containsMatch = lowerQuery.match(/contain(?:s)?(?: the letter)? (\w)/);
-  if (containsMatch) {
-    const target = containsMatch[1];
-    results = results.filter((item) =>
-      item.value.toLowerCase().includes(target.toLowerCase())
-    );
-    parsed_filters.contains_character = target.toLowerCase();
+  if (parsed_filters.word_count !== undefined) {
+    results = results.filter(item => item.properties.word_count === parsed_filters.word_count);
   }
-
-  if (results.length === 0) {
-    return res.status(422).json({
-      error: 'Query parsed but resulted in no matching data',
-      interpreted_query: {
-        original: query,
-        parsed_filters,
-      },
-    });
+  if (parsed_filters.min_length !== undefined) {
+    results = results.filter(item => item.properties.length >= parsed_filters.min_length);
+  }
+  if (parsed_filters.max_length !== undefined) {
+    results = results.filter(item => item.properties.length <= parsed_filters.max_length);
+  }
+  if (parsed_filters.contains_character !== undefined) {
+    const ch = parsed_filters.contains_character.toLowerCase();
+    results = results.filter(item => item.value.toLowerCase().includes(ch));
   }
 
   return res.status(200).json({
@@ -236,33 +248,32 @@ app.get('/strings/filter-by-natural-language', (req, res) => {
     count: results.length,
     interpreted_query: {
       original: query,
-      parsed_filters,
-    },
+      parsed_filters
+    }
   });
 });
 
 /**
- * 5️⃣ Delete String
+ * 5) DELETE /strings/{string_value}
+ * - 204 on success (empty body)
+ * - 404 if not found
  */
 app.delete('/strings/:string_value', (req, res) => {
-  const { string_value } = req.params;
-  const index = strings.findIndex(
-    (item) => item.value.toLowerCase() === string_value.toLowerCase()
-  );
-
-  if (index === -1) {
+  const stringValue = req.params.string_value;
+  const idx = strings.findIndex(item => item.value === stringValue);
+  if (idx === -1) {
     return res.status(404).json({ error: 'String does not exist in the system' });
   }
-
-  strings.splice(index, 1);
-  return res.status(204).send(); // Empty response body
+  strings.splice(idx, 1);
+  return res.status(204).send();
 });
 
-/**
- * Start Server
- */
+/* Health */
+app.get('/', (req, res) => res.json({ status: 'ok' }));
+
+/* Start */
 if (require.main === module) {
-  app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 }
 
 module.exports = app;
