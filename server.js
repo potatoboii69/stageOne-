@@ -74,12 +74,12 @@ app.get('/strings',(req,res)=>{
         })
     }
     let results = strings
-    const {isPalindrome, min_length, max_length, word_count, contains_char} = req.query
+    const {is_palindrome, min_length, max_length, word_count, contains_char} = req.query
 
     const parsed_filters = {} // <--- added this
 
     // Validate query types
-    if (isPalindrome !== undefined && !['true', 'false'].includes(isPalindrome)) {
+    if (is_palindrome !== undefined && !['true', 'false'].includes(is_palindrome)) {
         return res.status(400).json({
             error: 'Invalid query parameter: isPalindrome must be true or false'
         });
@@ -104,8 +104,8 @@ app.get('/strings',(req,res)=>{
     }
 
     // Filter if palindrome
-    if(isPalindrome !== undefined){
-        const boolValue = isPalindrome === 'true'
+    if(is_palindrome !== undefined){
+        const boolValue = is_palindrome === 'true'
         results = results.filter(item=>item.properties.isPalindrome===boolValue)
         parsed_filters.isPalindrome = boolValue
     }
