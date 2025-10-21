@@ -165,7 +165,7 @@ app.get('/strings/:string_value',(req, res) =>{
     return res.status(200).json(found_string);
 })
 
-app.post('/string', (req, res)=>{
+app.post('/strings', (req, res)=>{
     const {value} = req.body
     const existing = strings.find(item=>item.value === value)
     if(existing){
